@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Particle Lab — Web (Optimized)</title>
+<style>
+  :root{ --bg:#070a12; --ui:#0e1426; --ui2:#0b1020; --line:#1f2844; --text:#e6ecff; --accent:#7c3aed }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;display:grid;grid-template-rows:auto 1fr}
+  header{position:sticky;top:0;z-index:10;background:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.65));border-bottom:1px solid var(--line);backdrop-filter:saturate(1.2) blur(6px)}
+  .bar{max-width:1200px;margin:0 auto;padding:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .group{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);background:var(--ui2);border-radius:14px}
+  .group label{font-size:12px;opacity:.85}
+  button,input,select{background:#0c1020;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit}
+  button{cursor:pointer;transition:.2s ease transform,.2s ease background}
+  button:hover{transform:translateY(-1px)}
+  button.primary{background:var(--accent);border-color:transparent}
+  .seg{display:flex;gap:6px}
+  .seg button[aria-pressed="true"]{outline:2px solid var(--accent)}
+  .swatch{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);cursor:pointer}
+  .canvas-wrap{position:relative}
+  canvas{display:block;width:100vw;height:calc(100vh - 92px)}
+  .footer{position:fixed;right:12px;bottom:10px;font-size:12px;opacity:.65}
+  .badge{padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--ui);margin-left:6px}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="group seg" role="group" aria-label="Фігура">
+      <label>Фігура:</label>
+      <button data-shape="heart" aria-pressed="true">Серце</button>
+      <button data-shape="text">Слова</button>
+      <button data-shape="ring">Кільце</button>
+      <button data-shape="star">Зірка</button>
+      <button data-shape="wave">Хвиля</button>
+      <button data-shape="infinity">∞</button>
+    </div>
+
+    <div class="group seg" role="group" aria-label="Анімація">
+      <label>Анімація:</label>
+      <button data-anim="settle" aria-pressed="true">Спокій</button>
+      <button data-anim="swirl">Вихор</button>
+      <button data-anim="pulse">Пульс</button>
+      <button data-anim="orbit">Орбіта</button>
+      <button data-anim="explode">Вибух</button>
+      <button data-anim="fall">Падіння</button>
+    </div>
+
+    <div class="group">
+      <label for="words">Текст:</label>
+      <input id="words" type="text" value="My Love" placeholder="Введи текст" />
+      <button id="applyText">OK</button>
+    </div>
+
+    <div class="group">
+      <label>Колір:</label>
+      <div class="swatch" data-palette="rainbow" title="Райдуга" style="background:conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)"></div>
+      <div class="swatch" data-palette="gold" title="Золото" style="background:linear-gradient(135deg,#f7e38b,#e6b422)"></div>
+      <div class="swatch" data-palette="love" title="Love" style="background:linear-gradient(135deg,#ff74a4,#a463ff)"></div>
+      <input id="colorPick" type="color" value="#82cfff" title="Власний" />
+    </div>
+
+    <div class="group"><label for="density">Щільн.:</label><input id="density" type="range" min="2" max="8" step="1" value="4" /></div>
+    <div class="group"><label for="rotate">Поворот:</label><input id="rotate" type="range" min="-45" max="45" step="0.1" value="0" /></div>
+
+    <button id="toggleGlow">Glow OFF</button>
+    <button id="toggleFast">FAST</button>
+    <button id="savePng">Save PNG</button>
+  </div>
+</header>
+
+<div class="canvas-wrap"><canvas id="stage"></canvas></div>
+<div class="footer">Made with ♥ <span class="badge" id="fps">FPS: --</span></div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Canvas ----------
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+  const DPR = Math.min(window.devicePixelRatio||1, 2);
+  let W=0,H=0,CX=0,CY=0;
+
+  function resize(){
+    W = canvas.width  = Math.floor(innerWidth * DPR);
+    H = canvas.height = Math.floor((innerHeight - 92) * DPR);
+    canvas.style.width  = innerWidth + 'px';
+    canvas.style.height = (innerHeight - 92) + 'px';
+    CX=W/2; CY=H/2;
+    cache.clear();
+    reseedAll();
+    rebuildTargets();
+  }
+  addEventListener('resize', resize, {passive:true});
+
+  // ---------- UI ----------
+  const segShape   = [...document.querySelectorAll('[data-shape]')];
+  const segAnim    = [...document.querySelectorAll('[data-anim]')];
+  const wordsInput = document.getElementById('words');
+  const applyText  = document.getElementById('applyText');
+  const densityRange = document.getElementById('density');
+  const rotateRange  = document.getElementById('rotate');
+  const glowBtn = document.getElementById('toggleGlow');
+  const fastBtn = document.getElementById('toggleFast');
+  const colorPick = document.getElementById('colorPick');
+  const fpsLabel = document.getElementById('fps');
+  const savePng   = document.getElementById('savePng');
+
+  segShape.forEach(b=>b.onclick=()=>{ shape=b.dataset.shape; setPressed(segShape,b); cache.clear(); rebuildTargets(); });
+  segAnim.forEach(b=>b.onclick=()=>{ anim=b.dataset.anim; setPressed(segAnim,b); kickAnim(); });
+  applyText.onclick = ()=>{ userText = wordsInput.value.trim()||'♥'; cache.clear(); rebuildTargets(); };
+  let typeTimer; wordsInput.addEventListener('input', ()=>{ clearTimeout(typeTimer); typeTimer=setTimeout(applyText.onclick, 300); });
+  densityRange.oninput = e=>{ density = +e.target.value; cache.clear(); rebuildTargets(); };
+  rotateRange.oninput  = e=>{ angleDeg = +e.target.value; };
+
+  glowBtn.onclick = ()=>{ glow=!glow; glowBtn.textContent = glow? 'Glow ON':'Glow OFF'; glowBtn.classList.toggle('primary', glow); };
+  fastBtn.onclick = ()=>{ fast=!fast; fastBtn.classList.toggle('primary', fast); };
+
+  document.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{ palette=s.dataset.palette; }));
+  colorPick.oninput = e=>{ customColor=e.target.value; palette='custom'; };
+
+  savePng.onclick = ()=>{
+    const tmp = document.createElement('canvas');
+    tmp.width  = Math.round(W / DPR);
+    tmp.height = Math.round(H / DPR);
+    const tctx = tmp.getContext('2d');
+    tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+    const a = document.createElement('a'); a.href = tmp.toDataURL('image/png'); a.download = `particle_lab_${Date.now()}.png`; a.click();
+  };
+
+  function setPressed(list, active){ list.forEach(b=>b.setAttribute('aria-pressed', b===active)); }
+
+  // Drag-to-rotate
+  let dragging=false,lastX=0;
+  canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture(e.pointerId)});
+  canvas.addEventListener('pointerup',()=>dragging=false);
+  canvas.addEventListener('pointermove',e=>{ if(!dragging) return; const dx=e.clientX-lastX; lastX=e.clientX; angleDeg=Math.max(-45,Math.min(45,angleDeg+dx*0.15)); rotateRange.value=angleDeg; });
+
+  // ---------- State ----------
+  let shape='heart', anim='settle', userText='My Love';
+  let palette='rainbow', customColor='#82cfff';
+  let angleDeg=0, glow=false, density=4, fast=false;
+
+  // Physics tuning
+  const K_BASE = 28, DAMP_C = 10;
+  const VMAX   = 800 * DPR;
+  const WOBBLE = 0.10 * DPR;
+
+  // ---------- Particles ----------
+  const MAX = 12000;
+  let count = 4000;
+  const px = new Float32Array(MAX), py = new Float32Array(MAX);
+  const vx = new Float32Array(MAX), vy = new Float32Array(MAX);
+  const tx = new Float32Array(MAX), ty = new Float32Array(MAX);
+  const sz = new Float32Array(MAX), hh = new Float32Array(MAX);
+
+  function seed(i){ px[i]=Math.random()*W; py[i]=Math.random()*H; vx[i]=vy[i]=0; sz[i]=1+Math.random()*2; hh[i]=Math.random()*360; }
+  function reseedAll(){ for(let i=0;i<MAX;i++) seed(i); }
+  function setCountFromTargets(n){ count = Math.min(MAX, n>0 ? n : 2000); }
+
+  // ---------- Targets & sampling ----------
+  let targets=[]; const cache = new Map();
+  const off = document.createElement('canvas');
+  const octx = off.getContext('2d', { willReadFrequently:true });
+
+  function drawHeartPath(g,s){
+    g.beginPath();
+    g.moveTo(0,-.25*s);
+    g.bezierCurveTo(0,-.55*s,-.55*s,-.55*s,-.55*s,-.15*s);
+    g.bezierCurveTo(-.55*s,.25*s,0,.45*s,0,.75*s);
+    g.bezierCurveTo(0,.45*s,.55*s,.25*s,.55*s,-.15*s);
+    g.bezierCurveTo(.55*s,-.55*s,0,-.55*s,0,-.25*s);
+    g.closePath();
+  }
+
+  function buildHeart(){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    octx.save(); octx.translate(CX,CY);
+    const s=Math.min(W,H)*0.36; drawHeartPath(octx,s);
+    octx.fillStyle='#fff'; octx.fill(); octx.restore();
+    return sample();
+  }
+  function buildRing(){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    octx.save(); octx.translate(CX,CY);
+    const R=Math.min(W,H)*0.35, r=R*0.82;
+    octx.beginPath(); octx.arc(0,0,R,0,Math.PI*2); octx.arc(0,0,r,0,Math.PI*2,true); octx.closePath();
+    octx.fillStyle='#fff'; octx.fill(); octx.restore();
+    return sample();
+  }
+  function buildStar(){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    octx.save(); octx.translate(CX,CY);
+    const spikes=5, outer=Math.min(W,H)*0.36, inner=outer*0.45;
+    octx.beginPath();
+    for(let i=0;i<spikes*2;i++){ const ang=i*Math.PI/spikes; const r=(i%2?inner:outer); const x=Math.cos(ang)*r, y=Math.sin(ang)*r; i?octx.lineTo(x,y):octx.moveTo(x,y); }
+    octx.closePath(); octx.fillStyle='#fff'; octx.fill(); octx.restore();
+    return sample();
+  }
+  function buildWave(){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    octx.save(); octx.translate(0,CY);
+    const A=H*0.12, L=W; octx.beginPath(); octx.moveTo(0,0);
+    for(let x=0;x<=L;x+=8*DPR){ octx.lineTo(x, Math.sin(x*0.01)*A); }
+    octx.lineTo(L, A*2); octx.lineTo(0, A*2); octx.closePath();
+    octx.fillStyle='#fff'; octx.fill(); octx.restore();
+    return sample();
+  }
+  function buildInfinity(){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    octx.save(); octx.translate(CX,CY);
+    const a=Math.min(W,H)*0.18, b=a*0.7;
+    octx.beginPath();
+    for(let t=0;t<=Math.PI*2;t+=0.02){ const x=-a*Math.cos(t), y=b*Math.sin(t); t?octx.lineTo(x,y):octx.moveTo(x,y); }
+    for(let t=0;t<=Math.PI*2;t+=0.02){ const x= a*Math.cos(t), y=b*Math.sin(t); octx.lineTo(x,y); }
+    octx.closePath(); octx.fillStyle='#fff'; octx.fill(); octx.restore();
+    return sample();
+  }
+  function buildText(text){
+    off.width=W; off.height=H; octx.clearRect(0,0,W,H);
+    const pad = 40*DPR, maxW=Math.min(W-pad*2, W*0.9);
+    const fs  = Math.min(H*0.35, 220*DPR);
+    octx.fillStyle='#fff'; octx.textAlign='center'; octx.textBaseline='middle';
+    octx.font=`900 ${fs}px Inter,system-ui,Arial`;
+    const m=octx.measureText(text);
+    const scale=Math.min(1, maxW / Math.max(1, m.width + pad));
+    octx.save(); octx.translate(CX,CY); octx.scale(scale,scale); octx.fillText(text,0,0); octx.restore();
+    return sample();
+  }
+
+  function sample(){
+    const id = octx.getImageData(0,0,W,H).data;
+    const pts=[]; const step = Math.max(1, Math.floor(density*DPR));
+    for(let y=0;y<H;y+=step){
+      const row=y*W*4;
+      for(let x=0;x<W;x+=step){
+        const a = id[row + x*4 + 3];
+        if(a>120){
+          const ang = (Math.atan2(y-CY,x-CX)*180/Math.PI+360)%360;
+          pts.push({x,y,hue:ang});
+        }
+      }
+    }
+    return pts;
+  }
+
+  function rebuildTargets(){
+    const key = `${shape}|${shape==='text'?userText:''}|${W}x${H}|${density}`;
+    let pts = cache.get(key);
+    if(!pts){
+      if(shape==='text') pts = buildText(userText);
+      else if(shape==='ring') pts = buildRing();
+      else if(shape==='star') pts = buildStar();
+      else if(shape==='wave') pts = buildWave();
+      else if(shape==='infinity') pts = buildInfinity();
+      else pts = buildHeart();
+      if(!pts || pts.length===0){
+        // запасний варіант — хмара в центрі
+        pts=[]; const N=3000;
+        for(let i=0;i<N;i++){ const a=Math.random()*Math.PI*2, r=Math.random()*Math.min(W,H)*0.35;
+          const x=CX+Math.cos(a)*r, y=CY+Math.sin(a)*r;
+          const hue=(Math.atan2(y-CY,x-CX)*180/Math.PI+360)%360;
+          pts.push({x,y,hue});
+        }
+      }
+      cache.set(key, pts);
+    }
+    targets = pts;
+    // головне: кількість частинок = кількості точок (але не більше MAX)
+    setCountFromTargets(targets.length);
+
+    // якщо точок більше, ніж MAX — беремо рівномірне вибіркове підмноження
+    if(targets.length > count){
+      const ratio = targets.length / count;
+      for(let i=0;i<count;i++){
+        const t = targets[Math.floor(i*ratio)];
+        tx[i]=t.x; ty[i]=t.y; hh[i]=t.hue;
+      }
+    } else {
+      for(let i=0;i<count;i++){
+        const t = targets[i]; // 1:1 відображення
+        tx[i]=t.x; ty[i]=t.y; hh[i]=t.hue;
+      }
+    }
+  }
+
+  // ---------- Animation ----------
+  function colorFor(i){
+    if(palette==='gold'){ const q=i/(count-1||1); return `hsl(44 ${70+25*q}% ${40+25*q}%)`; }
+    if(palette==='love'){ const q=i/(count-1||1); return `hsl(${330-70*q} 85% ${55+15*q}%)`; }
+    if(palette==='custom') return customColor;
+    return `hsl(${hh[i]} 90% 65%)`;
+  }
+
+  function kickAnim(){
+    if(anim==='explode'){
+      for(let i=0;i<count;i++){ vx[i]+= (Math.random()-0.5)*8; vy[i]+= (Math.random()-0.5)*8; }
+    }
+  }
+
+  let last=performance.now(), fpsFrames=0, fpsLastT=last, acc=0;
+  const FIXED=1/60, MAX_STEPS=4;
+
+  function physicsStep(dt, now){
+    const k=K_BASE, dampExp=Math.exp(-DAMP_C*dt);
+    for(let i=0;i<count;i++){
+      let gx=tx[i], gy=ty[i];
+      if(anim==='orbit'){
+        const a = now*0.0007 + i*0.0002; const dx=gx-CX, dy=gy-CY; const r=Math.hypot(dx,dy); const ang=Math.atan2(dy,dx)+a;
+        gx=CX+Math.cos(ang)*r; gy=CY+Math.sin(ang)*r;
+      } else if(anim==='swirl'){
+        const dx = tx[i]-px[i], dy = ty[i]-py[i]; vx[i]+=(-dy)*0.35*dt; vy[i]+=dx*0.35*dt;
+      } else if(anim==='pulse'){
+        const s = 1 + Math.sin(now*0.005)*0.06; gx = CX + (tx[i]-CX)*s; gy = CY + (ty[i]-CY)*s;
+      } else if(anim==='fall'){
+        vy[i] += 90*dt;
+      }
+      const ax=(gx-px[i])*k, ay=(gy-py[i])*k;
+      vx[i]=(vx[i]+ax*dt)*dampExp;
+      vy[i]=(vy[i]+ay*dt)*dampExp;
+
+      const v2=vx[i]*vx[i]+vy[i]*vy[i];
+      if(v2>VMAX*VMAX){ const s=VMAX/Math.sqrt(v2); vx[i]*=s; vy[i]*=s; }
+
+      const ph=i*0.015;
+      px[i]+=vx[i]*dt + Math.sin(now*0.004 + ph)*WOBBLE*dt*60;
+      py[i]+=vy[i]*dt + Math.cos(now*0.0035+ ph)*WOBBLE*dt*60;
+    }
+  }
+
+  function tick(now){
+    const frameDt=Math.min(0.05,(now-last)/1000); last=now;
+    acc+=frameDt; let steps=0; while(acc>=FIXED && steps<MAX_STEPS){ physicsStep(FIXED, now); acc-=FIXED; steps++; }
+
+    // FPS
+    fpsFrames++; if(now - fpsLastT > 1000){ const fps = fpsFrames * 1000 / (now - fpsLastT); fpsLabel.textContent = `FPS: ${fps.toFixed(0)}`; fpsFrames=0; fpsLastT=now; }
+
+    // background + легкий слід
+    ctx.globalCompositeOperation='source-over';
+    ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(0,0,W,H);
+
+    // draw
+    const rad = angleDeg*Math.PI/180; ctx.save(); ctx.translate(CX,CY); ctx.rotate(rad); ctx.translate(-CX,-CY);
+    ctx.imageSmoothingEnabled=true;
+    if(glow && !fast){ ctx.shadowBlur=10*DPR; ctx.shadowColor='#fff'; } else { ctx.shadowBlur=0; }
+    ctx.globalCompositeOperation='lighter';
+
+    if(fast){
+      ctx.fillStyle = palette==='custom'? customColor : '#9cf';
+      const s=DPR; for(let i=0;i<count;i++) ctx.fillRect(px[i],py[i],s,s);
+    } else {
+      for(let i=0;i<count;i++){ ctx.beginPath(); ctx.fillStyle=colorFor(i); ctx.arc(px[i],py[i],(1+Math.random()*0.2)*DPR,0,Math.PI*2); ctx.fill(); }
+    }
+    ctx.restore();
+
+    requestAnimationFrame(tick);
+  }
+
+  // ---------- Boot ----------
+  resize();
+  rebuildTargets();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
